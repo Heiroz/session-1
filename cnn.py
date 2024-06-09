@@ -1,114 +1,112 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.nn.functional as F
+from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
-import torchvision.transforms as transforms
-import torchvision.datasets as datasets
 import matplotlib.pyplot as plt
 
 # 数据预处理
 transform = transforms.Compose([
     transforms.ToTensor(),
-    transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+    transforms.Normalize((0.1307,), (0.3081,))
 ])
 
-# 加载数据集
-trainset = datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
-testset = datasets.CIFAR10(root='./data', train=False, download=True, transform=transform)
+train_dataset = datasets.MNIST(root='./data', train=True, download=True, transform=transform)
+test_dataset = datasets.MNIST(root='./data', train=False, download=True, transform=transform)
 
-trainloader = DataLoader(trainset, batch_size=64, shuffle=True)
-testloader = DataLoader(testset, batch_size=64, shuffle=False)
+train_loader = DataLoader(train_dataset, batch_size=1280, shuffle=True)
+test_loader = DataLoader(test_dataset, batch_size=1280, shuffle=False)
 
-# 构建CNN模型
-class Net(nn.Module):
+# 定义CNN模型
+class CNN(nn.Module):
     def __init__(self):
-        super(Net, self).__init__()
-        self.conv_layer = nn.Sequential(
-            nn.Conv2d(3, 32, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2, 2), nn.Dropout(0.2),
-            nn.Conv2d(32, 64, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2, 2), nn.Dropout(0.3),
-            nn.Conv2d(64, 128, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2, 2), nn.Dropout(0.4)
-        )
-        self.fc_layer = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(128 * 4 * 4, 512), nn.ReLU(), nn.Dropout(0.5),
-            nn.Linear(512, 10)
-        )
+        super(CNN, self).__init__()
+        self.conv1 = nn.Conv2d(1, 32, kernel_size=3)
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3)
+        # 计算展平后的形状
+        conv1_output_size = (28 - 3 + 0) // 1 + 1  # 26x26
+        pool1_output_size = conv1_output_size // 2  # 13x13
+        conv2_output_size = (pool1_output_size - 3 + 0) // 1 + 1  # 11x11
+        pool2_output_size = conv2_output_size // 2  # 5x5
+        self.flatten_size = pool2_output_size * pool2_output_size * 64
+        self.fc1 = nn.Linear(self.flatten_size, 128)
+        self.fc2 = nn.Linear(128, 10)
+        self.dropout = nn.Dropout(0.5)
 
     def forward(self, x):
-        x = self.conv_layer(x)
-        x = self.fc_layer(x)
-        return x
+        x = F.relu(self.conv1(x))
+        x = F.max_pool2d(x, 2)
+        x = F.relu(self.conv2(x))
+        x = F.max_pool2d(x, 2)
+        x = x.view(-1, self.flatten_size)
+        x = F.relu(self.fc1(x))
+        x = self.dropout(x)
+        x = self.fc2(x)
+        return F.log_softmax(x, dim=1)
 
-# 初始化模型、损失函数和优化器
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-net = Net().to(device)
+model = CNN()
 criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(net.parameters(), lr=0.001, weight_decay=0.001)
+optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=0.001)
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model.to(device)
 
-# 训练模型
-def train_model(num_epochs):
-    train_losses, train_accuracy = [], []
-    test_losses, test_accuracy = [], []
-    for epoch in range(num_epochs):
-        net.train()
-        running_loss = 0.0
-        correct = 0
-        total = 0
-        for i, (inputs, labels) in enumerate(trainloader):
-            inputs, labels = inputs.to(device), labels.to(device)
-            
-            optimizer.zero_grad()
-            outputs = net(inputs)
-            loss = criterion(outputs, labels)
-            loss.backward()
-            optimizer.step()
-            
-            running_loss += loss.item()
-            _, predicted = torch.max(outputs.data, 1)
-            total += labels.size(0)
-            correct += (predicted == labels).sum().item()
+num_epochs = 10
+train_losses, train_accuracies = [], []
+test_losses, test_accuracies = [], []
 
-        train_losses.append(running_loss / len(trainloader))
-        train_accuracy.append(100 * correct / total)
+def evaluate(model, device, loader):
+    model.eval()
+    total_loss = 0
+    correct = 0
+    with torch.no_grad():
+        for data, target in loader:
+            data, target = data.to(device), target.to(device)
+            output = model(data)
+            total_loss += criterion(output, target).item() * data.size(0)  # 记录总损失
+            pred = output.argmax(dim=1, keepdim=True)
+            correct += pred.eq(target.view_as(pred)).sum().item()
+    total_loss /= len(loader.dataset)
+    accuracy = 100. * correct / len(loader.dataset)
+    return total_loss, accuracy
 
-        net.eval()
-        test_loss = 0.0
-        correct = 0
-        total = 0
-        with torch.no_grad():
-            for data in testloader:
-                images, labels = data
-                images, labels = images.to(device), labels.to(device)
-                outputs = net(images)
-                loss = criterion(outputs, labels)
-                test_loss += loss.item()
-                _, predicted = torch.max(outputs.data, 1)
-                total += labels.size(0)
-                correct += (predicted == labels).sum().item()
+for epoch in range(1, num_epochs + 1):
+    model.train()
+    for batch_idx, (data, target) in enumerate(train_loader):
+        data, target = data.to(device), target.to(device)
+        optimizer.zero_grad()
+        output = model(data)
+        loss = criterion(output, target)
+        loss.backward()
+        optimizer.step()
+        
+        train_loss, train_acc = evaluate(model, device, train_loader)
+        test_loss, test_acc = evaluate(model, device, test_loader)
+        
+        train_losses.append(train_loss)
+        train_accuracies.append(train_acc)
+        test_losses.append(test_loss)
+        test_accuracies.append(test_acc)
+        
+        print(f'Epoch: {epoch} Batch: {batch_idx} Train Loss: {train_loss:.6f} Train Accuracy: {train_acc:.2f}%')
+        print(f'Epoch: {epoch} Batch: {batch_idx} Test Loss: {test_loss:.6f} Test Accuracy: {test_acc:.2f}%')
 
-        test_losses.append(test_loss / len(testloader))
-        test_accuracy.append(100 * correct / total)
+# 可视化训练和测试表现
+plt.figure(figsize=(12, 5))
+plt.subplot(1, 2, 1)
+plt.plot(train_losses, label='Training loss')
+plt.plot(test_losses, label='Test loss')
+plt.xlabel('Iteration')
+plt.ylabel('Loss')
+plt.legend()
+plt.title('Loss per Iteration')
 
-        print(f'Epoch {epoch + 1}, Train Loss: {train_losses[-1]:.3f}, Train Acc: {train_accuracy[-1]:.3f}, Test Loss: {test_losses[-1]:.3f}, Test Acc: {test_accuracy[-1]:.3f}')
+plt.subplot(1, 2, 2)
+plt.plot(train_accuracies, label='Training accuracy')
+plt.plot(test_accuracies, label='Test accuracy')
+plt.xlabel('Iteration')
+plt.ylabel('Accuracy')
+plt.legend()
+plt.title('Accuracy per Iteration')
 
-    return train_losses, train_accuracy, test_losses, test_accuracy
-
-# 可视化训练过程
-def plot_results(train_losses, train_accuracy, test_losses, test_accuracy):
-    plt.figure(figsize=(12, 5))
-    plt.subplot(1, 2, 1)
-    plt.plot(train_losses, label='Train Loss')
-    plt.plot(test_losses, label='Validation Loss')
-    plt.title('Loss During Training')
-    plt.legend()
-
-    plt.subplot(1, 2, 2)
-    plt.plot(train_accuracy, label='Train Accuracy')
-    plt.plot(test_accuracy, label='Validation Accuracy')
-    plt.title('Accuracy During Training')
-    plt.legend()
-    plt.show()
-
-# 运行模型训练和评估
-train_losses, train_accuracy, test_losses, test_accuracy = train_model(10)
-plot_results(train_losses, train_accuracy, test_losses, test_accuracy)
+plt.show()
