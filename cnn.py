@@ -51,7 +51,7 @@ optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=0.001)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model.to(device)
 
-num_epochs = 10
+num_epochs = 5
 train_losses, train_accuracies = [], []
 test_losses, test_accuracies = [], []
 
@@ -100,6 +100,7 @@ plt.xlabel('Iteration')
 plt.ylabel('Loss')
 plt.legend()
 plt.title('Loss per Iteration')
+plt.savefig('loss.png')
 
 plt.subplot(1, 2, 2)
 plt.plot(train_accuracies, label='Training accuracy')
@@ -108,5 +109,6 @@ plt.xlabel('Iteration')
 plt.ylabel('Accuracy')
 plt.legend()
 plt.title('Accuracy per Iteration')
+plt.savefig('accuracy.png')
 
 plt.show()
